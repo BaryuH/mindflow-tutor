@@ -3,13 +3,13 @@ import time
 
 class DistractionDetector:
 
-    def __init__(self):
+    def __init__(self, away_threshold=4):
 
         self.away_start = None
 
         self.episode_history = []
 
-        self.away_threshold = 4
+        self.away_threshold = away_threshold
         self.long_threshold = self.away_threshold * 4
 
         self.window_time = 60

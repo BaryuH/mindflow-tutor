@@ -21,10 +21,10 @@ class AttentionTracker:
         ratio = (iris - left_eye_left) / \
             (left_eye_right - left_eye_left + 1e-6)
 
-        if ratio < 0.35:
+        if ratio < 4:
             return "right"
 
-        elif ratio > 0.65:
+        elif ratio > 0.6:
             return "left"
 
         return "center"
