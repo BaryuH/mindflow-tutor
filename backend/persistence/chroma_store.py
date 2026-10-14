@@ -4,12 +4,20 @@ import uuid
 from typing import List, Optional
 from pathlib import Path
 
-import chromadb
-from chromadb.config import Settings as ChromaSettings
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
-from dotenv import load_dotenv
+try:
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+    from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+except ImportError:
+    chromadb = None
+    ChromaSettings = None
+    OpenAIEmbeddingFunction = None
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 logger = logging.getLogger(__name__)
 
 CHROMA_DIR = os.environ.get("CHROMA_DIR", "./data/chroma_db")
@@ -56,43 +64,77 @@ class ChromaStore:
         documents: List[str],
         metadatas: List[dict],
         ids: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
     ):
         if ids is None:
             ids = [str(uuid.uuid4()) for _ in documents]
-        self.collection.add(documents=documents, metadatas=metadatas, ids=ids)
-        logger.info(f"ChromaDB: added {len(documents)} chunks")
 
-    def delete_by_source(self, source: str):
-        results = self.collection.get(where={"source": source}, include=["metadatas"])
+        # Inject tenant user_id into all chunk metadatas
+        enriched_metadatas = []
+        for meta in metadatas:
+            m = dict(meta) if meta else {}
+            if user_id and "user_id" not in m:
+                m["user_id"] = str(user_id)
+            elif "user_id" not in m:
+                m["user_id"] = "default"
+            enriched_metadatas.append(m)
+
+        self.collection.add(documents=documents, metadatas=enriched_metadatas, ids=ids)
+        logger.info(f"ChromaDB: added {len(documents)} chunks (user_id={user_id or 'default'})")
+
+    def delete_by_source(self, source: str, user_id: Optional[str] = None):
+        where_clause: dict
+        if user_id:
+            where_clause = {"$and": [{"source": source}, {"user_id": str(user_id)}]}
+        else:
+            where_clause = {"source": source}
+
+        results = self.collection.get(where=where_clause, include=["metadatas"])
         if results["ids"]:
             self.collection.delete(ids=results["ids"])
-            logger.info(f"ChromaDB: deleted {len(results['ids'])} chunks for '{source}'")
+            logger.info(f"ChromaDB: deleted {len(results['ids'])} chunks for '{source}' (user_id={user_id})")
 
     # ── read ───────────────────────────────────────────────────────────────────
 
-    def query(self, query_text: str, n_results: int = 5) -> dict:
+    def query(self, query_text: str, n_results: int = 5, user_id: Optional[str] = None) -> dict:
         # Clamp to actual collection size to avoid chromadb error
         count = self.collection.count()
         if count == 0:
             return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
         n = min(n_results, count)
+
+        where_clause = {"user_id": str(user_id)} if user_id else None
+
+        # Verify if any documents match this tenant before querying
+        if where_clause:
+            tenant_docs = self.collection.get(where=where_clause, limit=1)
+            if not tenant_docs or not tenant_docs.get("ids"):
+                return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+            n = min(n, len(self.collection.get(where=where_clause).get("ids", [])))
+            if n == 0:
+                return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+
         return self.collection.query(
             query_texts=[query_text],
             n_results=n,
+            where=where_clause,
             include=["documents", "metadatas", "distances"],
         )
 
-    def get_document_count(self) -> int:
+    def get_document_count(self, user_id: Optional[str] = None) -> int:
+        if user_id:
+            docs = self.collection.get(where={"user_id": str(user_id)})
+            return len(docs.get("ids", []))
         return self.collection.count()
 
-    def list_sources(self) -> List[str]:
-        results = self.collection.get(include=["metadatas"])
+    def list_sources(self, user_id: Optional[str] = None) -> List[str]:
+        where_clause = {"user_id": str(user_id)} if user_id else None
+        results = self.collection.get(where=where_clause, include=["metadatas"]) if where_clause else self.collection.get(include=["metadatas"])
         sources: set = set()
         for meta in results.get("metadatas", []):
             if meta and "source" in meta:
                 sources.add(meta["source"])
         return list(sources)
-
 
 # Singleton
 _chroma_store: Optional[ChromaStore] = None

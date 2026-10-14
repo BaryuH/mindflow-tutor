@@ -4,14 +4,14 @@ import uuid
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 
 from schemas.models import DocumentUploadResponse, DocumentInfo
 from engines.rag_retriever import get_rag_retriever
 from core.database import get_db
-
+from core.auth import get_optional_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["documents"])
 
@@ -26,8 +26,11 @@ MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 @router.post("/v1/documents/upload", response_model=DocumentUploadResponse)
-async def upload_document(file: UploadFile = File(...)):
-    """Upload and index a PDF document"""
+async def upload_document(
+    file: UploadFile = File(...),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """Upload and index a PDF document scoped to the authenticated user"""
     try:
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
@@ -48,9 +51,9 @@ async def upload_document(file: UploadFile = File(...)):
                     raise HTTPException(status_code=413, detail="PDF exceeds 50 MB limit")
                 buf.write(chunk)
 
+        user_id = current_user["id"] if current_user else "default"
         rag = get_rag_retriever()
-        result = await rag.index_document(str(file_path), file.filename)
-
+        result = await rag.index_document(str(file_path), file.filename, user_id=user_id)
         if not result["success"]:
             file_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail=result["message"])
@@ -58,6 +61,7 @@ async def upload_document(file: UploadFile = File(...)):
         db = get_db()
         doc_info = {
             "id": doc_id,
+            "user_id": user_id,
             "filename": file.filename,
             "file_path": str(file_path),
             "upload_date": datetime.now(timezone.utc).isoformat(),
@@ -82,11 +86,12 @@ async def upload_document(file: UploadFile = File(...)):
 
 
 @router.get("/v1/documents", response_model=List[DocumentInfo])
-async def list_documents():
-    """List all indexed documents"""
+async def list_documents(current_user: Optional[dict] = Depends(get_optional_current_user)):
+    """List indexed documents for the current user"""
     try:
         db = get_db()
-        documents = await db.documents.find({}, {"_id": 0}).to_list(100)
+        query = {"user_id": current_user["id"]} if current_user else {}
+        documents = await db.documents.find(query, {"_id": 0}).to_list(100)
         return [
             DocumentInfo(
                 id=doc["id"],
@@ -103,16 +108,22 @@ async def list_documents():
 
 
 @router.delete("/v1/documents/{document_id}")
-async def delete_document(document_id: str):
-    """Delete a document"""
+async def delete_document(
+    document_id: str,
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """Delete a document owned by the current user"""
     try:
         db = get_db()
-        doc = await db.documents.find_one({"id": document_id})
+        find_query = {"id": document_id}
+        if current_user:
+            find_query["user_id"] = current_user["id"]
+        doc = await db.documents.find_one(find_query)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
         rag = get_rag_retriever()
-        rag.delete_document(doc["filename"])
+        rag.delete_document(doc["filename"], user_id=doc.get("user_id"))
 
         file_path = Path(doc["file_path"])
         file_path.unlink(missing_ok=True)

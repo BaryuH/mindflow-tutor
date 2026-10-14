@@ -79,3 +79,23 @@ agenthub/agents/youtube/db
 
 # Mobile development
 android-sdk/ 
+
+# Data and local databases
+data/
+*.sqlite3
+**/data/
+**/chroma_db/
+
+# Model weights and binaries (downloaded automatically at runtime)
+*.caffemodel
+
+# Vite temporary build caches
+.vite/
+**/.vite/
+
+# Local agent & assistant skill mirrors
+.agent/
+.claude/
+client/.agent/
+client/.claude/
+*.local.json

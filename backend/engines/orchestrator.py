@@ -25,7 +25,8 @@ class Orchestrator:
         screen_capture: str,
         session_id: str,
         user_query: Optional[str] = None,
-        use_web_search: bool = False
+        use_web_search: bool = False,
+        user_id: Optional[str] = None,
     ) -> dict:
         """
         Main processing pipeline when confusion is detected.
@@ -37,12 +38,12 @@ class Orchestrator:
             vision_task = asyncio.create_task(
                 self.vision.analyze_screen(screen_capture)
             )
-            
-            # Get conversation history (sync operation wrapped)
-            history_context = self.memory.get_context_summary(session_id)
-            
-            # Wait for vision analysis
-            screen_analysis = await vision_task
+            memory_task = asyncio.create_task(
+                self.memory.get_context_summary_async(session_id)
+            )
+
+            # Wait for parallel tasks
+            screen_analysis, history_context = await asyncio.gather(vision_task, memory_task)
             
             # Step 2: Get RAG context based on screen analysis
             topic = screen_analysis.get("topic", "the current topic")
@@ -50,8 +51,7 @@ class Orchestrator:
             
             # Build RAG query from screen context and user query
             rag_query = user_query if user_query else " ".join(keywords[:5])
-            rag_context = self.rag.get_context(rag_query) if rag_query else ""
-            
+            rag_context = self.rag.get_context(rag_query, user_id=user_id) if rag_query else ""
             # Step 3: Determine if we need web search (only if RAG has no results)
             web_context = ""
             sources_used = ["LLM Internal Knowledge"]
@@ -87,7 +87,7 @@ class Orchestrator:
             # Step 5: Store messages in session memory
             user_content = user_query or f"[Confusion detected while viewing: {topic}]"
             await self.memory.add_message_async(session_id, "user", user_content, emotion="confused")
-            await self.memory.add_message_async(session_id, "assistant", text_response)
+            await self.memory.add_message_async(session_id, "assistant", text_response, user_id=user_id)
             
             # Step 6: Generate audio
             audio_base64 = None
@@ -120,16 +120,16 @@ class Orchestrator:
     async def process_direct_question(
         self,
         question: str,
-        session_id: str
+        session_id: str,
+        user_id: Optional[str] = None,
     ) -> dict:
         """Process a direct question from the user"""
         try:
-            # Get RAG context
-            rag_context = self.rag.get_context(question)
+            # Get RAG context (filtered by user tenant)
+            rag_context = self.rag.get_context(question, user_id=user_id)
             
             # Get formatted history
-            formatted_history = self.memory.get_formatted_history(session_id)
-            
+            formatted_history = await self.memory.get_formatted_history_async(session_id)
             # Generate response
             text_response = await self.openai.generate_response(
                 system_prompt=TUTOR_SYSTEM_PROMPT,
@@ -139,8 +139,8 @@ class Orchestrator:
             )
             
             # Store in memory
-            await self.memory.add_message_async(session_id, "user", question)
-            await self.memory.add_message_async(session_id, "assistant", text_response)
+            await self.memory.add_message_async(session_id, "user", question, user_id=user_id)
+            await self.memory.add_message_async(session_id, "assistant", text_response, user_id=user_id)
             
             # Generate audio
             audio_base64 = None

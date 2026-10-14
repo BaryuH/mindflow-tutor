@@ -1,17 +1,70 @@
-name: Build & Deploy to Azure App Service
+name: CI & Deploy to Azure App Service
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/mindflow-tutor
-  AZURE_WEBAPP_NAME: mindflow-tutor   # ← đổi thành tên App Service của bạn
+  AZURE_WEBAPP_NAME: mindflow-tutor
 
 jobs:
+  test-and-lint:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest pytest-asyncio
+          pip install -r backend/requirements-web.txt
+
+      - name: Backend Lint (Syntax & Critical Errors)
+        run: |
+          flake8 backend --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 backend --count --exit-zero --max-complexity=15 --max-line-length=127 --statistics
+
+      - name: Backend Unit Tests
+        run: |
+          PYTHONPATH=backend pytest tests/ -v
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: client/package.json
+
+      - name: Install frontend dependencies
+        working-directory: ./client
+        run: npm ci || npm install
+
+      - name: Frontend Lint
+        working-directory: ./client
+        run: npm run lint
+
+      - name: Frontend Build
+        working-directory: ./client
+        run: npm run build
+
   build-and-deploy:
+    name: Build & Deploy
+    needs: [test-and-lint]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:

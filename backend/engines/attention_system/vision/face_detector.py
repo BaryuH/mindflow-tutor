@@ -2,10 +2,14 @@ import os
 import urllib.request
 
 import cv2
-import mediapipe as mp
-from mediapipe.tasks import python as mp_tasks_python
-from mediapipe.tasks.python import vision as mp_tasks_vision
-
+try:
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_tasks_python
+    from mediapipe.tasks.python import vision as mp_tasks_vision
+except ImportError:
+    mp = None
+    mp_tasks_python = None
+    mp_tasks_vision = None
 _MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/1/face_landmarker.task"

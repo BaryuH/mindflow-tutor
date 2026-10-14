@@ -4,17 +4,35 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Optional
+import threading
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 import cv2
 import numpy as np
 
+from engines.attention_system.attention.distraction_detector import DistractionDetector as DistractionState
 from engines.attention_system.DistractDetector import DistractionDetector
-from engines.confusion_system.noptConfuseDetector import ConfuseDetector
+from engines.confusion_system.noptConfuseDetector import ConfuseDetector, ConfusionState
 
 logger = logging.getLogger(__name__)
 
-COOLDOWN_SECONDS = 5.0   # minimum gap between any two triggers
+COOLDOWN_SECONDS = 5.0   # minimum gap between any two triggers per user
+
+
+@dataclass
+class UserDetectorState:
+    session_id: str
+    confusion: ConfusionState = field(default_factory=ConfusionState)
+    distraction: DistractionState = field(default_factory=DistractionState)
+    last_trigger_time: float = 0.0
+    last_active: float = field(default_factory=time.time)
+
+    def reset(self):
+        self.confusion.reset()
+        self.distraction.reset()
+        self.last_trigger_time = time.time()
+        self.last_active = time.time()
 
 
 class CombinedDetectorEngine:
@@ -27,8 +45,10 @@ class CombinedDetectorEngine:
             clear_threshold=1,
         )
         self.distract_detector = DistractionDetector()
-        self._last_trigger_time: float = 0.0   # epoch time of last fired event
-
+        self._user_states: Dict[str, UserDetectorState] = {}
+        self._states_lock = threading.Lock()
+        self._max_states = 1000
+        self._state_ttl_seconds = 3600.0  # 1 hour
     # ── helpers ────────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -46,66 +66,104 @@ class CombinedDetectorEngine:
 
         return frame
 
-    def reset(self):
-        """Reset both detectors and the cooldown timer to initial state."""
-        # ── ConfuseDetector internals ──
-        self.confuse_detector.confused_elapsed = 0.0
-        self.confuse_detector.confused_since   = None
-        self.confuse_detector.recover_start_time = None
-        self.confuse_detector.is_confused      = False
-        self.confuse_detector._face_cache      = None
-        self.confuse_detector._frame_count     = 0
-        if hasattr(self.confuse_detector, "clear_start_time"):
-            self.confuse_detector.clear_start_time = None
+    def _cleanup_stale_states_locked(self, now: float):
+        if len(self._user_states) <= self._max_states:
+            return
+        stale_keys = [
+            k for k, v in self._user_states.items()
+            if (now - v.last_active) > self._state_ttl_seconds
+        ]
+        for k in stale_keys:
+            self._user_states.pop(k, None)
+        if len(self._user_states) > self._max_states:
+            sorted_keys = sorted(
+                self._user_states.keys(),
+                key=lambda k: self._user_states[k].last_active
+            )
+            for k in sorted_keys[: len(self._user_states) - self._max_states]:
+                self._user_states.pop(k, None)
 
-        # ── DistractionDetector internals ──
-        self.distract_detector.away_start       = None
-        self.distract_detector.episode_history  = []
-        self.distract_detector.triggered        = False
-        self.distract_detector.long_triggered   = False
+    def get_or_create_user_state(self, session_id: str = "default") -> UserDetectorState:
+        now = time.time()
+        with self._states_lock:
+            state = self._user_states.get(session_id)
+            if state is None:
+                self._cleanup_stale_states_locked(now)
+                state = UserDetectorState(
+                    session_id=session_id,
+                    confusion=self.confuse_detector.create_state(),
+                    distraction=self.distract_detector.create_state(),
+                    last_active=now,
+                )
+                self._user_states[session_id] = state
+            else:
+                state.last_active = now
+            return state
 
-        # ── restart cooldown from now so nothing fires for COOLDOWN_SECONDS ──
-        self._last_trigger_time = time.time()
-        logger.info("CombinedDetectorEngine: reset + cooldown started")
+    def reset(self, session_id: Optional[str] = None):
+        """Reset detector state for a specific session/user, or all if session_id is None."""
+        with self._states_lock:
+            if session_id:
+                state = self._user_states.get(session_id)
+                if state:
+                    state.reset()
+                else:
+                    self._user_states[session_id] = UserDetectorState(
+                        session_id=session_id,
+                        confusion=self.confuse_detector.create_state(),
+                        distraction=self.distract_detector.create_state(),
+                        last_trigger_time=time.time(),
+                        last_active=time.time(),
+                    )
+            else:
+                for state in self._user_states.values():
+                    state.reset()
+                self.confuse_detector.confused_elapsed = 0.0
+                self.confuse_detector.is_confused = False
+                self.distract_detector.distraction_state.reset()
+        logger.info(f"CombinedDetectorEngine: reset session={session_id or 'all'}")
 
     # ── detection ──────────────────────────────────────────────────────────────
 
-    def detect_from_base64(self, image_base64: str) -> dict:
+    def detect_from_base64(self, image_base64: str, session_id: str = "default") -> dict:
         frame_bgr = self._decode_frame(image_base64)
+        user_state = self.get_or_create_user_state(session_id)
 
         distracted, face_is_centered, eye_is_centered = (
-            self.distract_detector.detect_distraction(frame_bgr)
+            self.distract_detector.detect_distraction(frame_bgr, state=user_state.distraction)
         )
 
         confused = False
         emotion = None
         if face_is_centered and eye_is_centered:
             confused, emotion = self.confuse_detector.detect_confusion(
-                frame_bgr, draw=False
+                frame_bgr, draw=False, state=user_state.confusion
             )
 
-        # ── cooldown gate ──────────────────────────────────────────────────────
+        # ── cooldown gate (per-user) ──────────────────────────────────────────
         now = time.time()
-        in_cooldown = (now - self._last_trigger_time) < COOLDOWN_SECONDS
+        in_cooldown = (now - user_state.last_trigger_time) < COOLDOWN_SECONDS
 
         if in_cooldown:
             confused   = False
             distracted = False
         elif confused or distracted:
-            # fire event → reset everything + start new cooldown
-            self.reset()
+            # fire event → reset this user's state + start their new cooldown
+            user_state.reset()
 
         result = {
             "success":    True,
             "confused":   bool(confused),
             "distracted": bool(distracted),
+            "session_id": session_id,
         }
 
         logger.info(
             json.dumps(
                 {
-                    "event":      "frame_detection",
-                    "ts":         datetime.now(timezone.utc).isoformat(),
+                    "event":       "frame_detection",
+                    "session_id":  session_id,
+                    "ts":          datetime.now(timezone.utc).isoformat(),
                     "in_cooldown": in_cooldown,
                     **result,
                 }
@@ -114,10 +172,10 @@ class CombinedDetectorEngine:
 
         return result
 
-    async def detect_from_base64_async(self, image_base64: str) -> dict:
+    async def detect_from_base64_async(self, image_base64: str, session_id: str = "default") -> dict:
         """Non-blocking version — runs heavy CV work in a thread pool."""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.detect_from_base64, image_base64)
+        return await loop.run_in_executor(None, self.detect_from_base64, image_base64, session_id)
 
 
 _combined_detector_engine: Optional[CombinedDetectorEngine] = None
