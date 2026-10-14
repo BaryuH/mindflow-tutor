@@ -20,14 +20,14 @@ from passlib.context import CryptContext
 from jose import jwt, JWTError
 from motor.motor_asyncio import AsyncIOMotorClient
 
+from core.auth import SECRET_KEY, ALGORITHM
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # ── Crypto / JWT ──────────────────────────────────────────────────────────────
 
-SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "change-me-in-production")
-ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24 * 7      # 7 days
 VERIFY_TOKEN_EXPIRE_HOURS = 1           # 1 hour
 

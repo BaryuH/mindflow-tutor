@@ -36,31 +36,28 @@ db = client[os.environ['DB_NAME']]
 
 _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-_ADMIN_SEED = {
-    "full_name": "admin",
-    "email":     "***REMOVED***.test@gmail.com",
-    "password":  "***REMOVED***",
-    "role":      "admin",
-}
-
-
 async def _seed_admin():
-    existing = await db.users.find_one({"email": _ADMIN_SEED["email"]})
+    """Create the admin account from ADMIN_EMAIL / ADMIN_PASSWORD, if both are set."""
+    email = os.environ.get("ADMIN_EMAIL")
+    password = os.environ.get("ADMIN_PASSWORD")
+    if not email or not password:
+        return
+    existing = await db.users.find_one({"email": email})
     if existing:
         return
     doc = {
         "id":                     str(uuid.uuid4()),
-        "email":                  _ADMIN_SEED["email"],
-        "full_name":              _ADMIN_SEED["full_name"],
-        "hashed_password":        _pwd_ctx.hash(_ADMIN_SEED["password"]),
-        "role":                   _ADMIN_SEED["role"],
+        "email":                  email,
+        "full_name":              "admin",
+        "hashed_password":        _pwd_ctx.hash(password),
+        "role":                   "admin",
         "is_verified":            True,
         "verification_token":     None,
         "verification_token_exp": None,
         "created_at":             datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(doc)
-    logger.info(f"[seed] Admin account created: {_ADMIN_SEED['email']}")
+    logger.info(f"[seed] Admin account created: {email}")
 
 
 @asynccontextmanager

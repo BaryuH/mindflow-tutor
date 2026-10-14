@@ -8,8 +8,12 @@ from jose import JWTError, jwt
 
 logger = logging.getLogger(__name__)
 
-SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "change-me-in-production")
+_DEFAULT_SECRET = "change-me-in-production"
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY", _DEFAULT_SECRET)
 ALGORITHM = "HS256"
+
+if SECRET_KEY == _DEFAULT_SECRET:
+    logger.warning("JWT_SECRET_KEY is not set; tokens are signed with an insecure default key")
 
 security = HTTPBearer(auto_error=False)
 
