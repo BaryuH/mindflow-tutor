@@ -1,12 +1,26 @@
+import logging
 import time
 import threading
 import cv2
 import numpy as np
 try:
     import torch
+    from timm.layers.adaptive_avgmax_pool import SelectAdaptivePool2d
+    from timm.layers.conv2d_same import Conv2dSame
+    from timm.layers.norm_act import BatchNormAct2d
+    from timm.models._efficientnet_blocks import DepthwiseSeparableConv, InvertedResidual, SqueezeExcite
     from timm.models.efficientnet import EfficientNet as _EfficientNet
+
+    # hsemotion checkpoints are whole pickled models. torch>=2.6 loads with
+    # weights_only=True, so allowlist exactly the classes they contain
+    # (from torch.serialization.get_unsafe_globals_in_checkpoint).
     if hasattr(torch.serialization, "add_safe_globals"):
-        torch.serialization.add_safe_globals([_EfficientNet])
+        torch.serialization.add_safe_globals([
+            _EfficientNet, SelectAdaptivePool2d, Conv2dSame, BatchNormAct2d,
+            DepthwiseSeparableConv, InvertedResidual, SqueezeExcite,
+            torch.nn.SiLU, torch.nn.Sigmoid, torch.nn.Sequential, torch.nn.Conv2d,
+            torch.nn.Flatten, torch.nn.Identity, torch.nn.Linear, torch.nn.AdaptiveAvgPool2d,
+        ])
 except ImportError:
     _EfficientNet = None
 
@@ -18,6 +32,8 @@ try:
     from .download import download_dnn_model, PROTOTXT_PATH, WEIGHTS_PATH
 except ImportError:
     from download import download_dnn_model, PROTOTXT_PATH, WEIGHTS_PATH
+
+logger = logging.getLogger(__name__)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NORMAL_EMOTIONS = {"neutral", "happiness", "surprise"}
@@ -63,6 +79,7 @@ class ConfuseDetector:
             download_dnn_model()
             self.face_net = cv2.dnn.readNetFromCaffe(str(PROTOTXT_PATH), str(WEIGHTS_PATH))
         except Exception:
+            logger.exception("Failed to load the OpenCV DNN face detector")
             self.face_net = None
         self._dnn_lock = threading.Lock()
 
@@ -72,6 +89,7 @@ class ConfuseDetector:
             else:
                 self.model = None
         except Exception:
+            logger.exception("Failed to load HSEmotion model %r; confusion detection is disabled", model_name)
             self.model = None
         self.confused_elapsed = 0.0
         self.confused_since = None

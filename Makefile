@@ -1,9 +1,11 @@
 .PHONY: install db backend client lint test build
 
-TORCH_CPU := --extra-index-url https://download.pytorch.org/whl/cpu
+# PyTorch wheel index: cpu, or cu124 on the GPU host (make install TORCH_INDEX=cu124)
+TORCH_INDEX ?= cpu
+TORCH := --extra-index-url https://download.pytorch.org/whl/$(TORCH_INDEX)
 
-install: ## Install backend (CPU torch) and frontend dependencies
-	cd backend && pip install $(TORCH_CPU) -r requirements-web.txt -r requirements-ai.txt ruff pytest pytest-asyncio
+install: ## Install backend and frontend dependencies (TORCH_INDEX=cpu|cu124)
+	cd backend && pip install $(TORCH) -r requirements-web.txt -r requirements-ai.txt ruff pytest pytest-asyncio
 	cd client && npm ci
 
 db: ## Start MongoDB in Docker

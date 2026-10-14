@@ -1,8 +1,12 @@
-mediapipe==0.10.33
-torch>=2.0.0
-facenet-pytorch>=2.5.3
+# Vision / ML stack. Pick the PyTorch wheel index that matches the host:
+#   GPU, CUDA 12.4:  pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r requirements-ai.txt
+#   CPU only:        pip install --extra-index-url https://download.pytorch.org/whl/cpu   -r requirements-ai.txt
+# Without an index, Windows gets a CPU-only torch and Linux gets the newest CUDA build.
+torch>=2.5,<2.7           # the cu124 index stops at 2.6.0
+torchvision>=0.20,<0.22   # must match torch (2.5 <-> 0.20, 2.6 <-> 0.21)
 timm==0.9.12
-opencv-python>=4.8.0
-Pillow>=9.0.0
 hsemotion
+mediapipe==0.10.33
+opencv-contrib-python>=4.8,<4.12  # the cv2 build mediapipe depends on; 4.12+ requires numpy>=2
 numpy<2
+Pillow>=9.0.0
