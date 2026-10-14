@@ -1,28 +1,25 @@
-bcrypt==4.0.1
+# Web / API dependencies — every package here is imported directly by backend code.
 fastapi
-python-dotenv
-llama_index
-llama_parse
-llama-index
-llama-index-llms-openai 
-llama-index-embeddings-openai 
-llama-index-readers-llama-parse
 uvicorn
-starlette
+python-dotenv
+python-multipart
 pydantic
-pydantic_core==2.41.5
-python-multipart	
+pydantic-settings
+email-validator
+
+# Database & auth
 motor
-pymongo
-SQLAlchemy
-chromadb
-openai 
-elevenlabs 
-tavily-python 
-litellm
-typing_inspection
-annotated_types
 passlib
+bcrypt==4.0.1  # passlib 1.7 breaks with bcrypt>=4.1
 python-jose[cryptography]
-email_validator
-llama_cloud_services
+
+# HTTP clients
+httpx
+aiohttp
+
+# AI providers & RAG
+openai
+chromadb
+tavily-python
+llama-parse
+llama-cloud-services

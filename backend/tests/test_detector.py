@@ -1,7 +1,5 @@
 import time
-import pytest
 from engines.confusion_system.noptConfuseDetector import ConfusionState
-from engines.attention_system.attention.distraction_detector import DistractionDetector as DistractionState
 from engines.combined_detector_engine import UserDetectorState
 
 

@@ -1,7 +1,6 @@
 import os
 import json
 import sqlite3
-import asyncio
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime, timezone

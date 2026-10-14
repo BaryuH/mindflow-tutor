@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 
 from schemas.models import SystemStatus
-from engines.rag_retriever import get_rag_retriever
 from persistence.session_memory import get_session_memory
 from core.database import get_db
 

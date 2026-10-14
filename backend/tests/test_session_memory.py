@@ -1,6 +1,5 @@
 import os
 import tempfile
-import pytest
 from persistence.session_memory import SessionMemory
 
 

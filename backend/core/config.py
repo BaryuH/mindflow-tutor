@@ -1,7 +1,5 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
-import os
-from pathlib import Path
 
 class Settings(BaseSettings):
     # Database

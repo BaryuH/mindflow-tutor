@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import List, Optional
+from typing import Optional
 from tavily import AsyncTavilyClient
 from dotenv import load_dotenv
 

@@ -1,6 +1,5 @@
 import os
 import logging
-import base64
 import aiohttp
 from typing import Optional, AsyncGenerator
 from openai import AsyncOpenAI

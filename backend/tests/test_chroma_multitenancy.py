@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import MagicMock
 from persistence.chroma_store import ChromaStore
 
@@ -37,7 +36,7 @@ def test_chroma_store_query_enforces_user_tenant():
     }
     store.collection = mock_collection
 
-    res = store.query("kinematics", n_results=3, user_id="student_alice")
+    store.query("kinematics", n_results=3, user_id="student_alice")
 
     mock_collection.query.assert_called_once()
     _, kwargs = mock_collection.query.call_args

@@ -1,4 +1,3 @@
-import cv2
 
 from .vision.face_detector import FaceDetector
 from .vision.head_pose import HeadPoseEstimator
