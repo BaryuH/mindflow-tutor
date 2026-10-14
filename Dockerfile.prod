@@ -2,8 +2,8 @@
 FROM node:20-slim AS frontend-build
 
 WORKDIR /app/client
-COPY client/package*.json ./
-RUN npm ci --legacy-peer-deps
+COPY client/package.json client/package-lock.json ./
+RUN npm ci
 
 COPY client/ ./
 RUN npm run build
@@ -31,21 +31,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python deps
-COPY backend/requirements-web.txt ./requirements-web.txt
-COPY backend/requirements-ai.txt  ./requirements-ai.txt 2>/dev/null || true
+# Resolve web + AI deps in one pass so pip sees every constraint (e.g. numpy<2).
+# CPU-only torch wheels keep the image far smaller than the default CUDA build.
+COPY backend/requirements-web.txt backend/requirements-ai.txt ./
 RUN pip install --upgrade pip \
- && pip install -r requirements-web.txt \
- && ([ -f requirements-ai.txt ] && pip install -r requirements-ai.txt || true)
+ && pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r requirements-web.txt -r requirements-ai.txt
 
-# Copy backend source
 COPY backend/ ./
-
-# Copy built frontend into static/
 COPY --from=frontend-build /app/client/dist ./static
 
-# Patch server.py to serve React static files
-# (handled in server.py via StaticFiles mount — see note below)
+# Run as an unprivileged user; it owns /app because model weights and the
+# local vector store are written there at runtime.
+RUN useradd --create-home app && chown -R app /app
+USER app
 
 EXPOSE 8000
 
