@@ -254,7 +254,9 @@ const DashboardPage = () => {
             body: JSON.stringify({ text, intent: "the user fully understands the topic now and has no more questions" }),
           });
           fullyUnderstood = (await r.json()).match === true;
-        } catch { }
+        } catch {
+          // best-effort intent check: treat a failure as "not understood yet"
+        }
         if (fullyUnderstood) {
           // Resume detector
           if (detectorResumeTimerRef.current) clearTimeout(detectorResumeTimerRef.current);
@@ -285,7 +287,9 @@ const DashboardPage = () => {
             body: JSON.stringify({ text, intent: "the user is acknowledging they were distracted and will refocus on studying" }),
           });
           isAck = (await r.json()).match === true;
-        } catch { }
+        } catch {
+          // best-effort intent check: treat a failure as "not acknowledged"
+        }
         if (isAck) {
           const ackMsg = "That's the spirit! Let's keep going 💪";
           addMessage("ai", ackMsg);

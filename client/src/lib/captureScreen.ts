@@ -53,9 +53,9 @@ export async function captureScreenFrame(
     };
 
     // Use requestVideoFrameCallback if available, else fall back to canplay
-    if ("requestVideoFrameCallback" in video) {
+    if (typeof video.requestVideoFrameCallback === "function") {
       video.play().catch(() => {});
-      (video as any).requestVideoFrameCallback(draw);
+      video.requestVideoFrameCallback(draw);
     } else {
       video.oncanplay = () => {
         video.play()
