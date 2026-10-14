@@ -6,8 +6,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { authApi } from "@/lib/auth";
 import { useAuth } from "@/contexts/AuthContext";
 
-type View = "social" | "login" | "register" | "check-email";
-
 // ── Client-side validation (mirrors backend rules) ───────────────────────────
 
 const BLOCKED_TLDS = new Set([
@@ -18,7 +16,7 @@ const SUSPICIOUS_TLDS = new Set(["con","cmo","ocm","cpm","vom","cok"]);
 function validateFullName(name: string): string {
   if (!name) return "";
   if (name.length > 50) return "Full name must be at most 50 characters";
-  if (/[0-9!@#$%^&*()_+=\[\]{};:'",<>?/\\|`~]/.test(name))
+  if (/[0-9!@#$%^&*()_+=[\]{};:'",<>?/\\|`~]/.test(name))
     return "Full name must not contain numbers or special characters";
   return "";
 }
@@ -37,7 +35,7 @@ function validatePassword(password: string, email: string, fullName: string): st
   if (password.length < 8) return "At least 8 characters required";
   if (!/[A-Z]/.test(password)) return "Add at least one uppercase letter";
   if (!/\d/.test(password)) return "Add at least one number";
-  if (!/[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>/?`~]/.test(password))
+  if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/.test(password))
     return "Add at least one special character";
   const pw = password.toLowerCase();
   const emailLocal = email.split("@")[0].toLowerCase();

@@ -2,12 +2,18 @@ import time
 import threading
 import cv2
 import numpy as np
-import torch
-from timm.models.efficientnet import EfficientNet as _EfficientNet
-if hasattr(torch.serialization, "add_safe_globals"):
-    torch.serialization.add_safe_globals([_EfficientNet])
-from hsemotion.facial_emotions import HSEmotionRecognizer
+try:
+    import torch
+    from timm.models.efficientnet import EfficientNet as _EfficientNet
+    if hasattr(torch.serialization, "add_safe_globals"):
+        torch.serialization.add_safe_globals([_EfficientNet])
+except ImportError:
+    _EfficientNet = None
 
+try:
+    from hsemotion.facial_emotions import HSEmotionRecognizer
+except ImportError:
+    HSEmotionRecognizer = None
 try:
     from .download import download_dnn_model, PROTOTXT_PATH, WEIGHTS_PATH
 except ImportError:
@@ -16,6 +22,28 @@ except ImportError:
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NORMAL_EMOTIONS = {"neutral", "happiness", "surprise"}
 CONFUSED_EMOTIONS = {"sadness", "anger", "disgust", "fear", "contempt"}
+
+
+class ConfusionState:
+    """Per-user mutable state for confusion tracking."""
+
+    def __init__(self):
+        self.confused_elapsed: float = 0.0
+        self.confused_since = None
+        self.recover_start_time = None
+        self.clear_start_time = None
+        self.is_confused: bool = False
+        self.face_cache = None
+        self.frame_count: int = 0
+
+    def reset(self):
+        self.confused_elapsed = 0.0
+        self.confused_since = None
+        self.recover_start_time = None
+        self.clear_start_time = None
+        self.is_confused = False
+        self.face_cache = None
+        self.frame_count = 0
 
 
 class ConfuseDetector:
@@ -31,11 +59,20 @@ class ConfuseDetector:
         self.CLEAR_THRESHOLD_SECONDS = clear_threshold
 
         # Lightweight OpenCV DNN face detector
-        download_dnn_model()
-        self.face_net = cv2.dnn.readNetFromCaffe(str(PROTOTXT_PATH), str(WEIGHTS_PATH))
+        try:
+            download_dnn_model()
+            self.face_net = cv2.dnn.readNetFromCaffe(str(PROTOTXT_PATH), str(WEIGHTS_PATH))
+        except Exception:
+            self.face_net = None
         self._dnn_lock = threading.Lock()
-        self.model = HSEmotionRecognizer(model_name=model_name, device=DEVICE)
 
+        try:
+            if HSEmotionRecognizer is not None:
+                self.model = HSEmotionRecognizer(model_name=model_name, device=DEVICE)
+            else:
+                self.model = None
+        except Exception:
+            self.model = None
         self.confused_elapsed = 0.0
         self.confused_since = None
         self.recover_start_time = None
@@ -78,61 +115,66 @@ class ConfuseDetector:
         emotion, _ = self.model.predict_emotions(face_rgb, logits=True)
         return emotion.lower()
 
-    def check_focus(self, emotion):
+    def create_state(self) -> ConfusionState:
+        return ConfusionState()
+
+    def check_focus(self, emotion, state: ConfusionState = None):
+        target = state if state is not None else self
         now = time.time()
 
         if emotion in CONFUSED_EMOTIONS:
-            self.recover_start_time = None
-            self.clear_start_time = None  # interrupt clearing
-            if self.confused_since is None:
-                self.confused_since = now
-            total = self.confused_elapsed + (now - self.confused_since)
+            target.recover_start_time = None
+            target.clear_start_time = None  # interrupt clearing
+            if target.confused_since is None:
+                target.confused_since = now
+            total = target.confused_elapsed + (now - target.confused_since)
             if total >= self.CONFUSED_THRESHOLD_SECONDS:
-                self.is_confused = True
+                target.is_confused = True
 
         elif emotion in NORMAL_EMOTIONS:
             # pause confused timer
-            if self.confused_since is not None:
-                self.confused_elapsed += now - self.confused_since
-                self.confused_since = None
+            if target.confused_since is not None:
+                target.confused_elapsed += now - target.confused_since
+                target.confused_since = None
 
-            if self.is_confused:
+            if target.is_confused:
                 # start/continue clear grace period
-                if self.clear_start_time is None:
-                    self.clear_start_time = now
-                elif now - self.clear_start_time >= self.CLEAR_THRESHOLD_SECONDS:
+                if target.clear_start_time is None:
+                    target.clear_start_time = now
+                elif now - target.clear_start_time >= self.CLEAR_THRESHOLD_SECONDS:
                     # sustained normal — clear CONFUSED label
-                    self.is_confused = False
-                    self.clear_start_time = None
-                    self.confused_elapsed = 0.0
-                    self.recover_start_time = None
+                    target.is_confused = False
+                    target.clear_start_time = None
+                    target.confused_elapsed = 0.0
+                    target.recover_start_time = None
             else:
                 # not confused — handle thinking timer recovery
-                if self.recover_start_time is None:
-                    self.recover_start_time = now
-                elif now - self.recover_start_time >= self.RECOVER_GRACE_SECONDS:
-                    self.confused_elapsed = 0.0
-                    self.recover_start_time = None
+                if target.recover_start_time is None:
+                    target.recover_start_time = now
+                elif now - target.recover_start_time >= self.RECOVER_GRACE_SECONDS:
+                    target.confused_elapsed = 0.0
+                    target.recover_start_time = None
 
         else:  # no face
-            if self.confused_since is not None:
-                self.confused_elapsed += now - self.confused_since
-                self.confused_since = None
-            self.clear_start_time = None  # interrupt clearing
+            if target.confused_since is not None:
+                target.confused_elapsed += now - target.confused_since
+                target.confused_since = None
+            target.clear_start_time = None  # interrupt clearing
 
-        return self.is_confused
+        return target.is_confused
 
-    def get_hud(self, emotion, confused):
+    def get_hud(self, emotion, confused, state: ConfusionState = None):
+        target = state if state is not None else self
         now = time.time()
-        total = self.confused_elapsed
-        if self.confused_since is not None:
-            total += now - self.confused_since
+        total = target.confused_elapsed
+        if target.confused_since is not None:
+            total += now - target.confused_since
 
         if emotion is None:
             return "No face detected", (180, 180, 180)
         elif confused:
-            if self.clear_start_time is not None:
-                remaining = self.CLEAR_THRESHOLD_SECONDS - (now - self.clear_start_time)
+            if target.clear_start_time is not None:
+                remaining = self.CLEAR_THRESHOLD_SECONDS - (now - target.clear_start_time)
                 return f"CONFUSED (clearing in {remaining:.1f}s)", (0, 0, 255)
             return "CONFUSED", (0, 0, 255)
         elif total > 0:
@@ -141,20 +183,31 @@ class ConfuseDetector:
         else:
             return "NORMAL", (0, 200, 80)
 
-    def detect_confusion(self, frame_bgr, draw: bool = False):
+    def detect_confusion(self, frame_bgr, draw: bool = False, state: ConfusionState = None):
+        target = state if state is not None else self
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
         # only run heavy face detection every N frames
-        if self._frame_count % self.DETECT_EVERY_N == 0:
-            self._face_cache = self.detect_face(frame_rgb)
-        self._frame_count += 1
+        count = target.frame_count if state is not None else self._frame_count
+        if count % self.DETECT_EVERY_N == 0:
+            face_box = self.detect_face(frame_rgb)
+            if state is not None:
+                state.face_cache = face_box
+            else:
+                self._face_cache = face_box
 
-        face = self._face_cache
+        if state is not None:
+            state.frame_count += 1
+            face = state.face_cache
+        else:
+            self._frame_count += 1
+            face = self._face_cache
+
         emotion = self.predict(face, frame_rgb)
-        confused = self.check_focus(emotion)
+        confused = self.check_focus(emotion, state=state)
 
         if draw:
-            status_text, status_color = self.get_hud(emotion, confused)
+            status_text, status_color = self.get_hud(emotion, confused, state=state)
             cv2.putText(
                 frame_bgr,
                 status_text,

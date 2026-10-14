@@ -29,3 +29,7 @@ class DistractionDetector:
             self.triggered = False
 
         return False
+
+    def reset(self):
+        self.away_start = None
+        self.triggered = False

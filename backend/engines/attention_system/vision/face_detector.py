@@ -1,22 +1,29 @@
+import logging
 import os
 import urllib.request
 
 import cv2
-import mediapipe as mp
-from mediapipe.tasks import python as mp_tasks_python
-from mediapipe.tasks.python import vision as mp_tasks_vision
-
+try:
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_tasks_python
+    from mediapipe.tasks.python import vision as mp_tasks_vision
+except ImportError:
+    mp = None
+    mp_tasks_python = None
+    mp_tasks_vision = None
 _MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/1/face_landmarker.task"
 )
+logger = logging.getLogger(__name__)
+
 _MODEL_PATH = os.path.join(os.path.expanduser("~"), ".mediapipe", "face_landmarker.task")
 
 
 def _ensure_model():
     os.makedirs(os.path.dirname(_MODEL_PATH), exist_ok=True)
     if not os.path.isfile(_MODEL_PATH):
-        print(f"Downloading face landmarker model to {_MODEL_PATH} ...")
+        logger.info("Downloading face landmarker model to %s", _MODEL_PATH)
         urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
 
 

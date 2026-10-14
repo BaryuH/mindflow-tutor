@@ -59,7 +59,7 @@ const StatusBadge = ({ status }: { status: FileStatus }) => {
 
 /* ────────── Dashboard ────────── */
 const DashboardPage = () => {
-  const { user, isLoading: authLoading, isAuthenticated, logout } = useAuth();
+  const { user, token, isLoading: authLoading, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const locState = (location.state || {}) as { sessionId?: string; subject?: string; title?: string };
@@ -254,7 +254,9 @@ const DashboardPage = () => {
             body: JSON.stringify({ text, intent: "the user fully understands the topic now and has no more questions" }),
           });
           fullyUnderstood = (await r.json()).match === true;
-        } catch { }
+        } catch {
+          // best-effort intent check: treat a failure as "not understood yet"
+        }
         if (fullyUnderstood) {
           // Resume detector
           if (detectorResumeTimerRef.current) clearTimeout(detectorResumeTimerRef.current);
@@ -285,7 +287,9 @@ const DashboardPage = () => {
             body: JSON.stringify({ text, intent: "the user is acknowledging they were distracted and will refocus on studying" }),
           });
           isAck = (await r.json()).match === true;
-        } catch { }
+        } catch {
+          // best-effort intent check: treat a failure as "not acknowledged"
+        }
         if (isAck) {
           const ackMsg = "That's the spirit! Let's keep going 💪";
           addMessage("ai", ackMsg);
@@ -493,15 +497,22 @@ const DashboardPage = () => {
       const video = camVideoRef.current;
       if (!video || !camStreamRef.current || video.videoWidth === 0) return;
       try {
+        const targetWidth = 320;
+        const scale = Math.min(1, targetWidth / (video.videoWidth || 320));
         const canvas = document.createElement("canvas");
-        canvas.width  = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext("2d")!.drawImage(video, 0, 0);
-        const base64 = canvas.toDataURL("image/jpeg", 0.5).split(",")[1];
+        canvas.width  = Math.max(160, Math.round((video.videoWidth || 320) * scale));
+        canvas.height = Math.max(120, Math.round((video.videoHeight || 240) * scale));
+        canvas.getContext("2d")!.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const base64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
+        const authToken = token || localStorage.getItem("mt_token") || "";
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (authToken) {
+          headers["Authorization"] = `Bearer ${authToken}`;
+        }
         const res = await fetch("/api/v1/detector/frame", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image_base64: base64 }),
+          headers,
+          body: JSON.stringify({ image_base64: base64, session_id: sessionId }),
         });
         if (!res.ok) return;
         const data = await res.json();

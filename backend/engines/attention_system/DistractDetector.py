@@ -1,4 +1,3 @@
-import cv2
 
 from .vision.face_detector import FaceDetector
 from .vision.head_pose import HeadPoseEstimator
@@ -8,14 +7,20 @@ from .attention.distraction_detector import DistractionDetector as DistractionSt
 
 class DistractionDetector():
     def __init__(self):
-        self.face_detector = FaceDetector()
-        self.head_pose = HeadPoseEstimator()
+        try:
+            self.face_detector = FaceDetector()
+            self.head_pose = HeadPoseEstimator()
+        except Exception:
+            self.face_detector = None
+            self.head_pose = None
         self.distraction_state = DistractionState()
+    def create_state(self) -> DistractionState:
+        return DistractionState()
 
-    def detect_distraction(self, frame):
+    def detect_distraction(self, frame, state=None):
         face_detector = self.face_detector
         head_pose = self.head_pose
-        distraction = self.distraction_state
+        distraction = state if state is not None else self.distraction_state
 
         landmarks = face_detector.detect(frame)
 

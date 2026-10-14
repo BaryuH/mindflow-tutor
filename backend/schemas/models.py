@@ -18,7 +18,7 @@ class ProcessTriggerRequest(BaseModel):
     emotion_state: EmotionState = Field(default=EmotionState.CONFUSED)
     user_query: Optional[str] = Field(None, description="Optional explicit question from user")
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-
+    user_id: Optional[str] = Field(None, description="Authenticated user id")
 
 class ProcessTriggerResponse(BaseModel):
     """Response model for confusion trigger processing"""
@@ -38,7 +38,8 @@ class ClassifyIntentRequest(BaseModel):
 class DetectorFrameRequest(BaseModel):
     """Request model for webcam frame analysis"""
     image_base64: str = Field(..., description="Base64 encoded camera frame")
-
+    session_id: Optional[str] = Field(None, description="Session ID for state tracking")
+    user_id: Optional[str] = Field(None, description="User ID for tenant state tracking")
 
 class DocumentUploadResponse(BaseModel):
     """Response for document upload"""

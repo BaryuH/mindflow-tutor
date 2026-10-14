@@ -41,7 +41,6 @@ async def voice_websocket(websocket: WebSocket):
 
     conversation_history = []
     audio_buffer = []
-    is_collecting_audio = False
 
     logger.info(f"Voice WebSocket connected: {session_id}")
 
@@ -68,7 +67,6 @@ async def voice_websocket(websocket: WebSocket):
                             has_speech, confidence = audio_processor.detect_voice_activity(audio_data)
 
                             if has_speech:
-                                is_collecting_audio = True
                                 audio_processor.add_to_buffer(audio_data)
 
                             await websocket.send_json({
@@ -133,7 +131,6 @@ async def voice_websocket(websocket: WebSocket):
                                     })
 
                             audio_processor.reset()
-                            is_collecting_audio = False
 
                             await websocket.send_json({"type": "status", "status": "listening"})
 
@@ -171,7 +168,6 @@ async def voice_websocket(websocket: WebSocket):
                     has_speech, confidence = audio_processor.detect_voice_activity(audio_data)
 
                     if has_speech:
-                        is_collecting_audio = True
                         audio_processor.add_to_buffer(audio_data)
 
             except WebSocketDisconnect:

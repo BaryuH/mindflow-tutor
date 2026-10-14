@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mic, Video, VideoOff, Scan, Send, LogOut, AlertTriangle, Volume2, VolumeX, ScreenShare, ScreenShareOff } from "lucide-react";
 import { sessionStore } from "@/lib/sessionStore";
+import { useAuth } from "@/contexts/AuthContext";
 
 type Message = {
   id: string;
@@ -24,6 +25,7 @@ type PipBridge = {
 
 const SessionPage = () => {
   const navigate = useNavigate();
+  const { token } = useAuth();
 
   const [sessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<Message[]>([]);
@@ -440,15 +442,22 @@ const SessionPage = () => {
       const video = camVideoRef.current;
       if (!video || !camStreamRef.current || video.videoWidth === 0) return;
       try {
+        const targetWidth = 320;
+        const scale = Math.min(1, targetWidth / (video.videoWidth || 320));
         const canvas = document.createElement("canvas");
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext("2d")!.drawImage(video, 0, 0);
-        const base64 = canvas.toDataURL("image/jpeg", 0.5).split(",")[1];
+        canvas.width  = Math.max(160, Math.round((video.videoWidth || 320) * scale));
+        canvas.height = Math.max(120, Math.round((video.videoHeight || 240) * scale));
+        canvas.getContext("2d")!.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const base64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
+        const authToken = token || localStorage.getItem("mt_token") || "";
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (authToken) {
+          headers["Authorization"] = `Bearer ${authToken}`;
+        }
         const res = await fetch("/api/v1/detector/frame", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image_base64: base64 }),
+          headers,
+          body: JSON.stringify({ image_base64: base64, session_id: sessionId }),
         });
         if (!res.ok) return;
         const data = await res.json();

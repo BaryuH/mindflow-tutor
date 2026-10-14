@@ -1,5 +1,7 @@
 # MindFlow Tutor
 
+[![CI/CD](https://github.com/BaryuH/mindflow-tutor/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/BaryuH/mindflow-tutor/actions/workflows/ci-cd.yml)
+
 Proactive Multimodal AI Learning Assistant — FastAPI backend + React/Vite frontend.
 
 Detects distraction and confusion via webcam in real time, then proactively helps the user refocus or clarifies confusing material using AI.
@@ -12,112 +14,73 @@ Detects distraction and confusion via webcam in real time, then proactively help
 | Backend  | FastAPI, Python 3.11, Uvicorn                       |
 | Database | MongoDB (Motor async driver)                        |
 | AI       | OpenAI GPT-4o, ElevenLabs TTS, Tavily Search        |
-| RAG      | LlamaIndex + ChromaDB                               |
-| Auth     | JWT + Email verification (SMTP/Gmail)               |
+| RAG      | LlamaParse + ChromaDB                               |
+| Auth     | JWT + Email verification (SMTP/Gmail), Google/Facebook OAuth |
 | Vision   | MediaPipe, OpenCV, hsemotion (EfficientNet-B0)      |
+| CI/CD    | GitHub Actions → GHCR → Azure App Service           |
 
 ---
 
-## Prerequisites
+## Quick start
 
-- **Conda** (recommended) or Python 3.11+
-- **Node.js 18+**
-- **Docker** (for MongoDB)
-- API keys: OpenAI, ElevenLabs, Tavily, LlamaParse (see `.env` section below)
-
----
-
-## 1. Start MongoDB
+Prerequisites: **Python 3.11**, **Node.js 20**, **Docker** (for MongoDB), and API keys for OpenAI, ElevenLabs, Tavily and LlamaParse.
 
 ```bash
-docker run -d -p 27017:27017 --name mongodb mongo
-```
+# 1. MongoDB
+docker compose up -d mongo
 
----
-
-## 2. Backend Setup
-
-### 2a. Create conda environment
-
-```bash
-conda create -n mind-tutor python=3.11 -y
-conda activate mind-tutor
-```
-
-### 2b. Install dependencies
-
-```bash
+# 2. Backend — web + AI deps in one pass (CPU-only torch)
 cd backend
-pip install -r requirements-ai.txt
-pip install -r requirements-web.txt
-```
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+  -r requirements-web.txt -r requirements-ai.txt
+cp .env.example .env        # then fill in your keys
+uvicorn server:app --reload --port 8000
 
-> **Note:** `requirements-ai.txt` must be installed first — it pins `numpy<2` and vision packages (torch, mediapipe, hsemotion) that web dependencies may conflict with if installed in the wrong order. Install may take a few minutes.
-
-
-### 2dc Configure environment
-
-```bash
-cp .env.example .env
-# Edit .env with your keys
-```
-
-Required `.env` values:
-
-```env
-# OpenAI
-OPENAI_API_KEY=sk-...
-
-# ElevenLabs (text-to-speech)
-ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=...
-
-# Tavily (web search)
-TAVILY_API_KEY=tvly-...
-
-# LlamaParse (PDF parsing)
-LLAMA_CLOUD_API_KEY=llx-...
-
-# MongoDB
-MONGODB_URL=mongodb://localhost:27017
-MONGODB_DB_NAME=mindflow
-
-# JWT
-SECRET_KEY=your-secret-key-here
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-
-# Gmail SMTP (for email verification)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your-gmail@gmail.com
-SMTP_PASSWORD=xxxx xxxx xxxx xxxx   # Gmail App Password (16 chars)
-EMAIL_FROM=your-gmail@gmail.com
-FRONTEND_URL=http://localhost:5173
-```
-
-
-### 2e. Start backend server
-
-```bash
-uvicorn server:app --reload --host 0.0.0.0 --port 8000
-```
-
-API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-
----
-
-## 3. Frontend Setup
-
-```bash
+# 3. Frontend (new terminal)
 cd client
-npm install
+npm ci
 npm run dev
 ```
 
-App: [http://localhost:5173](http://localhost:5173)
+- App: http://localhost:5173 (the Vite dev server proxies `/api` → `:8000`)
+- API docs: http://localhost:8000/docs
 
-The Vite dev server proxies `/api` → `http://localhost:8000` automatically.
+With `make` available, the same steps are `make install`, `make db`, `make backend` and `make client`.
+
+To run the production image locally instead: `docker compose --profile full up --build` → http://localhost:8000.
+
+### Configuration
+
+All settings live in [`backend/.env.example`](backend/.env.example) — copy it to `backend/.env`. Notes:
+
+- `JWT_SECRET_KEY` — generate with `python -c "import secrets; print(secrets.token_hex(32))"`. The server logs a warning if it is unset.
+- `ADMIN_EMAIL` / `ADMIN_PASSWORD` — optional; when both are set an admin account is created on startup.
+- `SMTP_PASSWORD` — a Gmail App Password, used for email verification.
+
+Model weights (face detector, face landmarker) are downloaded automatically on first use.
+
+---
+
+## Development
+
+| Task | Command |
+| --- | --- |
+| Backend lint | `cd backend && ruff check .` |
+| Backend tests | `cd backend && pytest` |
+| Frontend lint / types | `cd client && npm run lint && npm run typecheck` |
+| Frontend tests | `cd client && npm test` |
+| Smoke test against a running server | `python scripts/smoke_test.py` |
+
+Git hooks (ruff, secret scanning, large-file guard): `pip install pre-commit && pre-commit install`.
+
+### CI/CD
+
+[`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml):
+
+1. **Every PR and push** — backend (ruff + pytest) and frontend (lint, typecheck, test, build) run in parallel.
+2. **Push to `main`** — builds `Dockerfile.prod` and pushes it to `ghcr.io/baryuh/mindflow-tutor`.
+3. **Deploy** — runs only once the repository variable `AZURE_WEBAPP_NAME` and the secret `AZURE_WEBAPP_PUBLISH_PROFILE` are configured; it uses the `production` environment.
 
 ---
 
@@ -126,27 +89,32 @@ The Vite dev server proxies `/api` → `http://localhost:8000` automatically.
 ```
 mindflow-tutor/
 ├── backend/
-│   ├── core/               # Prompts, config
+│   ├── core/               # Config, auth, DB, prompts
 │   ├── engines/
-│   │   ├── attention_system/   # Distraction detection (head pose + eye tracking)
+│   │   ├── attention_system/   # Distraction detection (head pose)
 │   │   ├── confusion_system/   # Confusion detection (emotion recognition)
-│   │   └── combined_detector_engine.py
-│   ├── persistence/        # Session memory (ChromaDB)
-│   ├── providers/          # OpenAI, ElevenLabs, Tavily
+│   │   ├── combined_detector_engine.py
+│   │   ├── orchestrator.py     # Vision + RAG + LLM pipeline
+│   │   └── rag_retriever.py
+│   ├── persistence/        # Session memory, ChromaDB vector store
+│   ├── providers/          # OpenAI, Tavily, voice (Whisper + ElevenLabs)
 │   ├── routers/            # API route handlers
 │   ├── schemas/            # Pydantic models
+│   ├── tests/              # pytest suite
 │   ├── server.py           # FastAPI entrypoint
-│   └── requirements.txt
+│   ├── pyproject.toml      # ruff + pytest config
+│   └── requirements-{web,ai}.txt
 ├── client/
-│   ├── src/
-│   │   ├── components/     # UI components (shadcn/ui)
-│   │   ├── contexts/       # Auth context
-│   │   ├── hooks/          # Custom hooks
-│   │   ├── lib/            # Auth utilities
-│   │   └── pages/          # Login, Session, StartLearning, VerifyEmail
-│   ├── vite.config.ts
-│   └── package.json
-└── backend_test.py         # API integration tests
+│   └── src/
+│       ├── components/     # Feature components + ui/ (shadcn/ui)
+│       ├── contexts/       # Auth context
+│       ├── hooks/
+│       ├── lib/            # API clients, helpers
+│       └── pages/          # Index, Login, Dashboard, Session, ...
+├── scripts/smoke_test.py   # Manual checks against a running server
+├── docker-compose.yml
+├── Dockerfile.prod
+└── Makefile
 ```
 
 ---
@@ -161,23 +129,9 @@ mindflow-tutor/
 | GET    | `/api/auth/verify-email`        | Verify email token                 |
 | POST   | `/api/v1/ask`                   | Ask a question (RAG + AI)          |
 | POST   | `/api/v1/process-trigger`       | Confusion trigger (screen + AI)    |
-| POST   | `/api/v1/detect`                | Webcam frame analysis              |
+| POST   | `/api/v1/detector/frame`        | Webcam frame analysis              |
 | POST   | `/api/v1/utils/classify-intent` | Semantic intent classification     |
 | POST   | `/api/v1/documents/upload`      | Upload PDF for RAG                 |
 | WS     | `/api/v1/voice`                 | Real-time voice chat (WebSocket)   |
 
-Full interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-
----
-## Scripts
-
-```bash
-# Run API integration tests
-python backend_test.py
-
-# Frontend production build
-cd client && npm run build
-
-# Frontend lint
-cd client && npm run lint
-```
+Full interactive docs: http://localhost:8000/docs

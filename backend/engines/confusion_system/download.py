@@ -1,6 +1,9 @@
+import logging
 import urllib.request
 from pathlib import Path
 
+
+logger = logging.getLogger(__name__)
 
 PROTOTXT_URL = "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt"
 WEIGHTS_URL = "https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
@@ -14,10 +17,10 @@ def download_dnn_model():
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
     if not PROTOTXT_PATH.exists():
-        print("Downloading face detector prototxt...")
+        logger.info("Downloading face detector prototxt to %s", PROTOTXT_PATH)
         urllib.request.urlretrieve(PROTOTXT_URL, PROTOTXT_PATH)
     if not WEIGHTS_PATH.exists():
-        print("Downloading face detector weights...")
+        logger.info("Downloading face detector weights to %s", WEIGHTS_PATH)
         urllib.request.urlretrieve(WEIGHTS_URL, WEIGHTS_PATH)
 
 

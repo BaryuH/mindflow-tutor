@@ -94,7 +94,7 @@ async def get_conversation(session_id: str):
     """Get conversation history (in-memory)"""
     try:
         memory = get_session_memory()
-        messages = memory.get_history(session_id)
+        messages = await memory.get_history_async(session_id)
         return ConversationHistory(
             session_id=session_id,
             messages=[
@@ -117,7 +117,7 @@ async def list_sessions():
     """List all in-memory sessions"""
     try:
         memory = get_session_memory()
-        return memory.get_all_sessions()
+        return await memory.get_all_sessions_async()
     except Exception as e:
         logger.error(f"Error listing sessions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -128,7 +128,7 @@ async def clear_conversation(session_id: str):
     """Clear conversation"""
     try:
         memory = get_session_memory()
-        memory.clear_session(session_id)
+        await memory.clear_session_async(session_id)
         return {"status": "cleared", "session_id": session_id}
     except Exception as e:
         logger.error(f"Error clearing conversation: {e}")

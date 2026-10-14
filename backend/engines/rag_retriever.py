@@ -55,7 +55,7 @@ class RAGRetriever:
         self.llama_api_key = os.environ.get("LLAMA_CLOUD_API_KEY")
         Path(UPLOADS_DIR).mkdir(parents=True, exist_ok=True)
 
-    async def index_document(self, file_path: str, filename: str) -> dict:
+    async def index_document(self, file_path: str, filename: str, user_id: Optional[str] = None) -> dict:
         """Parse a PDF with LlamaParse and index chunks into ChromaDB."""
         try:
             if not self.llama_api_key:
@@ -80,16 +80,18 @@ class RAGRetriever:
                 page_chunks = _split_into_chunks(doc.text)
                 for chunk_idx, chunk in enumerate(page_chunks):
                     chunks.append(chunk)
-                    metadatas.append({
+                    meta = {
                         "source":      filename,
                         "page":        page_idx + 1,
                         "chunk_index": chunk_idx,
-                    })
-
+                    }
+                    if user_id:
+                        meta["user_id"] = str(user_id)
+                    metadatas.append(meta)
             if not chunks:
                 return {"success": False, "message": "Document appears to have no readable text"}
 
-            self.chroma.add_documents(documents=chunks, metadatas=metadatas)
+            self.chroma.add_documents(documents=chunks, metadatas=metadatas, user_id=user_id)
 
             logger.info(f"Indexed '{filename}': {page_count} pages → {len(chunks)} chunks")
             return {
@@ -103,10 +105,10 @@ class RAGRetriever:
             logger.error(f"Error indexing '{filename}': {e}")
             return {"success": False, "message": str(e)}
 
-    def retrieve(self, query: str, n_results: int = 6) -> dict:
-        """Return top-k chunks most relevant to query."""
+    def retrieve(self, query: str, user_id: Optional[str] = None, n_results: int = 6) -> dict:
+        """Return top-k chunks most relevant to query for a specific user tenant."""
         try:
-            raw = self.chroma.query(query, n_results=n_results)
+            raw = self.chroma.query(query, n_results=n_results, user_id=user_id)
             docs      = raw.get("documents",  [[]])[0]
             metas     = raw.get("metadatas",  [[]])[0]
             distances = raw.get("distances",  [[]])[0]
@@ -124,13 +126,12 @@ class RAGRetriever:
             logger.error(f"Retrieval error: {e}")
             return {"query": query, "results": [], "total_found": 0}
 
-    def get_context(self, query: str, max_chars: int = 3000) -> str:
+    def get_context(self, query: str, user_id: Optional[str] = None, max_chars: int = 3000) -> str:
         """
         Return a formatted context string for the LLM.
         Filters to chunks with score >= 0.30 so unrelated docs don't pollute the prompt.
         """
-        results = self.retrieve(query)
-
+        results = self.retrieve(query, user_id=user_id)
         relevant = [r for r in results["results"] if r["score"] >= 0.30]
         if not relevant:
             return "No relevant materials found in uploaded documents."
@@ -152,15 +153,14 @@ class RAGRetriever:
 
     # ── management helpers ─────────────────────────────────────────────────────
 
-    def delete_document(self, filename: str):
-        self.chroma.delete_by_source(filename)
+    def delete_document(self, filename: str, user_id: Optional[str] = None):
+        self.chroma.delete_by_source(filename, user_id=user_id)
 
-    def get_indexed_documents(self) -> List[str]:
-        return self.chroma.list_sources()
+    def get_indexed_documents(self, user_id: Optional[str] = None) -> List[str]:
+        return self.chroma.list_sources(user_id=user_id)
 
-    def get_document_count(self) -> int:
-        return self.chroma.get_document_count()
-
+    def get_document_count(self, user_id: Optional[str] = None) -> int:
+        return self.chroma.get_document_count(user_id=user_id)
 
 # Singleton
 _rag_retriever: Optional[RAGRetriever] = None
