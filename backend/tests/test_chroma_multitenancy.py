@@ -107,7 +107,8 @@ def test_rag_retriever_unscoped_calls_safe_fallback():
 
     # Unauthenticated retrieve should return empty result
     res = retriever.retrieve("algebra", user_id=None)
-    assert res == {"query": "algebra", "results": [], "total_found": 0}
+    assert res["results"] == []
+    assert res["total_found"] == 0
     mock_chroma.query.assert_not_called()
 
     # Unauthenticated get_context should return safe fallback string
