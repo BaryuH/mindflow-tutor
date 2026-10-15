@@ -58,6 +58,9 @@ class RAGRetriever:
     async def index_document(self, file_path: str, filename: str, user_id: Optional[str] = None) -> dict:
         """Parse a PDF with LlamaParse and index chunks into ChromaDB."""
         try:
+            if not user_id or not str(user_id).strip():
+                return {"success": False, "message": "user_id is required to index document"}
+
             if not self.llama_api_key:
                 return {"success": False, "message": "LLAMA_CLOUD_API_KEY not configured"}
 
@@ -84,16 +87,15 @@ class RAGRetriever:
                         "source":      filename,
                         "page":        page_idx + 1,
                         "chunk_index": chunk_idx,
+                        "user_id":     str(user_id),
                     }
-                    if user_id:
-                        meta["user_id"] = str(user_id)
                     metadatas.append(meta)
             if not chunks:
                 return {"success": False, "message": "Document appears to have no readable text"}
 
             self.chroma.add_documents(documents=chunks, metadatas=metadatas, user_id=user_id)
 
-            logger.info(f"Indexed '{filename}': {page_count} pages → {len(chunks)} chunks")
+            logger.info(f"Indexed '{filename}': {page_count} pages → {len(chunks)} chunks (user_id={user_id})")
             return {
                 "success":        True,
                 "chunks_indexed": len(chunks),
@@ -107,6 +109,9 @@ class RAGRetriever:
 
     def retrieve(self, query: str, user_id: Optional[str] = None, n_results: int = 6) -> dict:
         """Return top-k chunks most relevant to query for a specific user tenant."""
+        if not user_id or not str(user_id).strip():
+            logger.warning("RAG retrieve called without user_id; returning empty result to enforce tenant scoping")
+            return {"query": query, "results": [], "total_found": 0}
         try:
             raw = self.chroma.query(query, n_results=n_results, user_id=user_id)
             docs      = raw.get("documents",  [[]])[0]
@@ -131,6 +136,8 @@ class RAGRetriever:
         Return a formatted context string for the LLM.
         Filters to chunks with score >= 0.30 so unrelated docs don't pollute the prompt.
         """
+        if not user_id or not str(user_id).strip():
+            return "No relevant materials found in uploaded documents."
         results = self.retrieve(query, user_id=user_id)
         relevant = [r for r in results["results"] if r["score"] >= 0.30]
         if not relevant:
@@ -154,12 +161,18 @@ class RAGRetriever:
     # ── management helpers ─────────────────────────────────────────────────────
 
     def delete_document(self, filename: str, user_id: Optional[str] = None):
+        if not user_id or not str(user_id).strip():
+            raise ValueError("user_id is required to delete document")
         self.chroma.delete_by_source(filename, user_id=user_id)
 
     def get_indexed_documents(self, user_id: Optional[str] = None) -> List[str]:
+        if not user_id or not str(user_id).strip():
+            return []
         return self.chroma.list_sources(user_id=user_id)
 
     def get_document_count(self, user_id: Optional[str] = None) -> int:
+        if not user_id or not str(user_id).strip():
+            return 0
         return self.chroma.get_document_count(user_id=user_id)
 
 # Singleton
