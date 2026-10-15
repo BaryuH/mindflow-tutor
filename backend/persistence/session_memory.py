@@ -292,14 +292,50 @@ class SessionMemory:
     def get_active_sessions(self) -> int:
         return len(self.sessions)
 
-    def get_all_sessions(self) -> List[dict]:
+    def get_session_user_id(self, session_id: str) -> Optional[str]:
+        if session_id in self.session_metadata:
+            uid = self.session_metadata[session_id].get("user_id")
+            if uid:
+                return uid
+        if self._sqlite_path.exists():
+            try:
+                with self._get_sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT user_id FROM sessions WHERE session_id = ?", (session_id,))
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        return row[0]
+            except Exception as e:
+                logger.warning(f"[SessionMemory] SQLite get_session_user_id error: {e}")
+        return None
+
+    async def get_session_user_id_async(self, session_id: str) -> Optional[str]:
+        local_uid = self.get_session_user_id(session_id)
+        if local_uid:
+            return local_uid
+        if self._db is not None:
+            try:
+                doc = await self._db.conversations.find_one({"session_id": session_id}, {"_id": 0, "user_id": 1})
+                if doc and doc.get("user_id"):
+                    return doc["user_id"]
+            except Exception as e:
+                logger.warning(f"[SessionMemory] MongoDB get_session_user_id error: {e}")
+        return None
+
+    def get_all_sessions(self, user_id: Optional[str] = None) -> List[dict]:
         try:
             if self._sqlite_path.exists():
                 with self._get_sqlite_conn() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(
-                        "SELECT session_id, title, subject, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT 50"
-                    )
+                    if user_id:
+                        cursor.execute(
+                            "SELECT session_id, title, subject, created_at, updated_at FROM sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 50",
+                            (user_id,)
+                        )
+                    else:
+                        cursor.execute(
+                            "SELECT session_id, title, subject, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT 50"
+                        )
                     rows = cursor.fetchall()
                     if rows:
                         return [
@@ -318,13 +354,15 @@ class SessionMemory:
         return [
             {"session_id": sid, **self.session_metadata.get(sid, {})}
             for sid in self.sessions.keys()
+            if not user_id or self.session_metadata.get(sid, {}).get("user_id") == user_id
         ]
 
-    async def get_all_sessions_async(self) -> List[dict]:
+    async def get_all_sessions_async(self, user_id: Optional[str] = None) -> List[dict]:
         if self._db is not None:
             try:
+                query = {"user_id": user_id} if user_id else {}
                 cursor = self._db.conversations.find(
-                    {},
+                    query,
                     {
                         "_id": 0,
                         "session_id": 1,
@@ -350,8 +388,7 @@ class SessionMemory:
                     ]
             except Exception as e:
                 logger.warning(f"[SessionMemory] MongoDB get_all_sessions failed: {e}")
-        return self.get_all_sessions()
-
+        return self.get_all_sessions(user_id=user_id)
 
 # Singleton instance
 _session_memory: Optional[SessionMemory] = None
