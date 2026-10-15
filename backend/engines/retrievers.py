@@ -1,8 +1,11 @@
+import os
 import re
+import json
 import math
 import logging
 from collections import Counter, defaultdict
 from typing import List, Dict, Any, Optional, Tuple
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -40,20 +43,23 @@ class BM25Index:
     Parameters: k1 = 1.5, b = 0.75
     """
 
-    def __init__(self, k1: float = 1.5, b: float = 0.75):
+    def __init__(self, k1: float = 1.5, b: float = 0.75, persistence_path: Optional[str] = None):
         self.k1 = k1
         self.b = b
+        self.persistence_path = persistence_path or os.environ.get("BM25_PERSISTENCE_PATH", "./data/bm25_index.json")
         # tenant_id -> list of document records
-        # Record: {"id": str, "content": str, "metadata": dict, "tokens": List[str], "length": int}
         self.corpus: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        # tenant_id -> token -> document_frequency
         self.doc_freqs: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        # tenant_id -> token -> list of (doc_index, term_frequency)
         self.inverted_index: Dict[str, Dict[str, List[Tuple[int, int]]]] = defaultdict(lambda: defaultdict(list))
-        # tenant_id -> total token count
         self.total_tokens: Dict[str, int] = defaultdict(int)
 
-    def add_documents(self, documents: List[str], metadatas: List[Dict[str, Any]], user_id: str):
+    def add_documents(
+        self,
+        documents: List[str],
+        metadatas: List[Dict[str, Any]],
+        user_id: str,
+        auto_save: bool = True,
+    ):
         if not user_id or not str(user_id).strip():
             raise ValueError("user_id is required to index documents in BM25Index")
 
@@ -80,7 +86,9 @@ class BM25Index:
                 self.doc_freqs[tenant][term] += 1
                 self.inverted_index[tenant][term].append((doc_idx, count))
 
-    def delete_by_source(self, source: str, user_id: str):
+        if auto_save:
+            self.save_to_disk()
+    def delete_by_source(self, source: str, user_id: str, auto_save: bool = True):
         if not user_id:
             raise ValueError("user_id is required to delete documents from BM25Index")
         tenant = str(user_id)
@@ -98,8 +106,47 @@ class BM25Index:
         # Rebuild tenant index
         self.clear_tenant(tenant)
         if new_docs:
-            self.add_documents(new_docs, new_metas, user_id=tenant)
+            self.add_documents(new_docs, new_metas, user_id=tenant, auto_save=False)
+        if auto_save:
+            self.save_to_disk()
 
+    def save_to_disk(self, file_path: Optional[str] = None) -> bool:
+        path = Path(file_path or self.persistence_path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            serializable = {}
+            for tenant, docs in self.corpus.items():
+                serializable[tenant] = [
+                    {"content": d["content"], "metadata": d["metadata"]}
+                    for d in docs
+                ]
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(serializable, f, ensure_ascii=False)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to persist BM25 index to {path}: {e}")
+            return False
+
+    def load_from_disk(self, file_path: Optional[str] = None) -> bool:
+        path = Path(file_path or self.persistence_path)
+        if not path.exists():
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.corpus.clear()
+            self.doc_freqs.clear()
+            self.inverted_index.clear()
+            self.total_tokens.clear()
+            for tenant, docs in data.items():
+                contents = [d["content"] for d in docs]
+                metas = [d.get("metadata", {}) for d in docs]
+                self.add_documents(contents, metas, user_id=tenant, auto_save=False)
+            logger.info(f"Loaded BM25 index from {path} ({sum(len(d) for d in data.values())} chunks).")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to load BM25 index from {path}: {e}")
+            return False
     def clear_tenant(self, user_id: str):
         tenant = str(user_id)
         if tenant in self.corpus:

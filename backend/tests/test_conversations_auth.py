@@ -113,3 +113,33 @@ def test_list_sessions_filters_by_user():
         # Verify MongoDB was queried with {"user_id": "user_a"}
         call_args = mock_conversations.find.call_args
         assert call_args[0][0] == {"user_id": "user_a"}
+
+def test_unowned_legacy_session_default_deny():
+    token_user_a = _make_token("user_a", "a@test.com")
+    headers_a = {"Authorization": f"Bearer {token_user_a}"}
+
+    mock_db = MagicMock()
+    mock_conversations = MagicMock()
+    mock_db.conversations = mock_conversations
+
+    # Legacy unowned session (user_id is None / empty)
+    mock_conversations.find_one = AsyncMock(return_value={
+        "session_id": "s_legacy_orphan",
+        "user_id": None,
+        "messages": [{"role": "user", "content": "orphan message"}],
+    })
+
+    with patch("routers.conversations.get_db", return_value=mock_db):
+        # Trying to modify unowned legacy session must be rejected with 403 (default-deny)
+        res = client.post(
+            "/v1/sessions",
+            headers=headers_a,
+            json={"session_id": "s_legacy_orphan", "title": "Claiming orphan"},
+        )
+        assert res.status_code == 403
+        assert "Not authorized" in res.json()["detail"]
+
+        # Trying to read unowned legacy session must be rejected with 403
+        res_read = client.get("/v1/sessions/s_legacy_orphan/messages", headers=headers_a)
+        assert res_read.status_code == 403
+        assert "Not authorized" in res_read.json()["detail"]

@@ -38,6 +38,12 @@ class RAGRetriever:
         self.llama_api_key = os.environ.get("LLAMA_CLOUD_API_KEY")
         Path(UPLOADS_DIR).mkdir(parents=True, exist_ok=True)
 
+        # Rehydrate BM25 index across server restarts:
+        # First try loading from disk; if empty, rehydrate from ChromaDB persistent store
+        loaded = self.bm25.load_from_disk()
+        if not loaded or sum(len(docs) for docs in self.bm25.corpus.values()) == 0:
+            self.rehydrate_bm25_from_chroma()
+
     async def index_document(self, file_path: str, filename: str, user_id: Optional[str] = None) -> dict:
         """Parse a PDF with LlamaParse and index chunks into ChromaDB."""
         try:
@@ -208,6 +214,33 @@ class RAGRetriever:
         if not user_id or not str(user_id).strip():
             return 0
         return self.chroma.get_document_count(user_id=user_id)
+
+    def rehydrate_bm25_from_chroma(self, user_id: Optional[str] = None):
+        """Rehydrate BM25 index from ChromaDB persistent vector store across server restarts."""
+        try:
+            from collections import defaultdict
+            where_clause = {"user_id": str(user_id)} if user_id else None
+            data = self.chroma.collection.get(where=where_clause, include=["documents", "metadatas"])
+            docs = data.get("documents", [])
+            metas = data.get("metadatas", [])
+            if not docs:
+                return
+
+            tenant_docs = defaultdict(list)
+            tenant_metas = defaultdict(list)
+            for i, doc in enumerate(docs):
+                m = metas[i] if i < len(metas) else {}
+                uid = m.get("user_id") or "default"
+                tenant_docs[uid].append(doc)
+                tenant_metas[uid].append(m)
+
+            for uid, d_list in tenant_docs.items():
+                self.bm25.add_documents(d_list, tenant_metas[uid], user_id=uid, auto_save=False)
+
+            self.bm25.save_to_disk()
+            logger.info(f"Rehydrated BM25 index from ChromaDB: {len(docs)} chunks across {len(tenant_docs)} tenants.")
+        except Exception as e:
+            logger.warning(f"BM25 rehydration from ChromaDB failed: {e}")
 
 # Singleton
 _rag_retriever: Optional[RAGRetriever] = None

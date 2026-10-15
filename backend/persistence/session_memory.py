@@ -321,6 +321,49 @@ class SessionMemory:
             except Exception as e:
                 logger.warning(f"[SessionMemory] MongoDB get_session_user_id error: {e}")
         return None
+    def has_session(self, session_id: str) -> bool:
+        if session_id in self.sessions or session_id in self.session_metadata:
+            return True
+        if self._sqlite_path.exists():
+            try:
+                with self._get_sqlite_conn() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT 1 FROM sessions WHERE session_id = ?", (session_id,))
+                    if cursor.fetchone():
+                        return True
+            except Exception as e:
+                logger.warning(f"[SessionMemory] SQLite has_session error: {e}")
+        return False
+
+    async def has_session_async(self, session_id: str) -> bool:
+        if self.has_session(session_id):
+            return True
+        if self._db is not None:
+            try:
+                count = await self._db.conversations.count_documents({"session_id": session_id})
+                return count > 0
+            except Exception as e:
+                logger.warning(f"[SessionMemory] MongoDB has_session error: {e}")
+        return False
+
+    async def check_session_access_async(self, session_id: str, user_id: str) -> bool:
+        """
+        Verify that caller user_id is authorized to access session_id.
+        Default Deny rule:
+        - If session already exists anywhere:
+          - MUST have user_id equal to caller user_id.
+          - If session has no user_id (unowned / legacy orphan) or different user_id -> returns False.
+        - If session does not exist anywhere yet: returns True (new session).
+        """
+        if not user_id or not str(user_id).strip():
+            return False
+        exists = await self.has_session_async(session_id)
+        if not exists:
+            return True
+        owner_id = await self.get_session_user_id_async(session_id)
+        if not owner_id or owner_id != user_id:
+            return False
+        return True
 
     def get_all_sessions(self, user_id: Optional[str] = None) -> List[dict]:
         try:

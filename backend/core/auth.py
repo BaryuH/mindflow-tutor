@@ -47,6 +47,17 @@ def decode_token(token: str) -> dict:
                 detail="Token missing subject claim",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        # Strictly reject non-access tokens (e.g. exchange codes or state tokens)
+        purpose = payload.get("purpose")
+        token_type = payload.get("type", "access")
+        if purpose in ("oauth_exchange", "oauth_state") or token_type != "access":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type: exchange codes or state tokens cannot be used as access tokens",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
         return {
             "id": user_id,
             "email": payload.get("email", ""),

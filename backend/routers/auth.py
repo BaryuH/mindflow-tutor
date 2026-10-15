@@ -7,6 +7,12 @@ import smtplib
 import asyncio
 import logging
 import unicodedata
+import secrets
+import hashlib
+import smtplib
+import asyncio
+import logging
+import unicodedata
 from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -44,9 +50,9 @@ def _verify_password(plain: str, hashed: str) -> bool:
 
 def _create_jwt(data: dict, expire_hours: int) -> str:
     payload = data.copy()
+    payload.setdefault("type", "access")
     payload["exp"] = datetime.now(timezone.utc) + timedelta(hours=expire_hours)
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
 
 # ── Database helper ───────────────────────────────────────────────────────────
 
@@ -314,55 +320,84 @@ class OAuthExchangeRequest(BaseModel):
     code: str
 
 
-_used_exchange_jtis = set()
+_memory_exchange_store: dict = {}
 
 
-def _oauth_success_redirect(app_url: str, user_id: str, email: str, full_name: str) -> str:
-    jti = str(uuid.uuid4())
-    payload = {
-        "sub": user_id,
-        "email": email,
-        "full_name": full_name,
-        "purpose": "oauth_exchange",
-        "jti": jti,
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=2),
-    }
-    exchange_code = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-    return f"{app_url}/oauth-callback?code={exchange_code}"
+async def _create_oauth_exchange_code(user_id: str, email: str, full_name: str) -> str:
+    raw_code = secrets.token_urlsafe(32)
+    code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+    exp = datetime.now(timezone.utc) + timedelta(minutes=2)
+
+    try:
+        db = _get_db()
+        await db.oauth_exchange_codes.insert_one({
+            "code_hash": code_hash,
+            "user_id": user_id,
+            "email": email,
+            "full_name": full_name,
+            "expires_at": exp,
+            "created_at": datetime.now(timezone.utc),
+        })
+    except Exception as e:
+        logger.warning(f"Could not persist exchange code to MongoDB, using fallback store: {e}")
+        _memory_exchange_store[code_hash] = {
+            "user_id": user_id,
+            "email": email,
+            "full_name": full_name,
+            "expires_at": exp,
+        }
+    return raw_code
+
+
+async def _oauth_success_redirect(app_url: str, user_id: str, email: str, full_name: str) -> str:
+    code = await _create_oauth_exchange_code(user_id, email, full_name)
+    return f"{app_url}/oauth-callback?code={code}"
 
 
 @router.post("/oauth/exchange", response_model=TokenResponse)
 async def exchange_oauth_code(body: OAuthExchangeRequest):
-    """Exchange a short-lived single-use OAuth exchange code for an access token in HTTP response body."""
+    """Exchange a short-lived single-use random OAuth code for an access token via atomic database deletion."""
+    if not body.code or len(body.code) < 16:
+        raise HTTPException(status_code=400, detail="Invalid exchange code")
+
+    code_hash = hashlib.sha256(body.code.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+    doc = None
+
     try:
-        payload = jwt.decode(body.code, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("purpose") != "oauth_exchange":
-            raise HTTPException(status_code=400, detail="Invalid exchange code")
-        jti = payload.get("jti")
-        if not jti or jti in _used_exchange_jtis:
-            raise HTTPException(status_code=400, detail="Exchange code has already been used or is invalid")
-        _used_exchange_jtis.add(jti)
+        db = _get_db()
+        doc = await db.oauth_exchange_codes.find_one_and_delete({
+            "code_hash": code_hash,
+            "expires_at": {"$gt": now},
+        })
+    except Exception as e:
+        logger.warning(f"MongoDB exchange code query error: {e}")
 
-        user_id = payload.get("sub")
-        email = payload.get("email", "")
-        full_name = payload.get("full_name", "")
+    if not doc and code_hash in _memory_exchange_store:
+        mem_item = _memory_exchange_store.pop(code_hash, None)
+        if mem_item and mem_item["expires_at"] > now:
+            doc = mem_item
 
-        access_token = _create_jwt(
-            {"sub": user_id, "email": email},
-            expire_hours=ACCESS_TOKEN_EXPIRE_HOURS,
-        )
+    if not doc:
+        raise HTTPException(status_code=400, detail="Invalid, expired, or already used exchange code")
 
-        return TokenResponse(
-            access_token=access_token,
-            user={
-                "id": user_id,
-                "email": email,
-                "full_name": full_name,
-            },
-        )
-    except JWTError:
-        raise HTTPException(status_code=400, detail="Invalid or expired exchange code")
+    user_id = doc["user_id"]
+    email = doc.get("email", "")
+    full_name = doc.get("full_name", "")
 
+    access_token = _create_jwt(
+        {"sub": user_id, "email": email, "type": "access"},
+        expire_hours=ACCESS_TOKEN_EXPIRE_HOURS,
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        user={
+            "id": user_id,
+            "email": email,
+            "full_name": full_name,
+        },
+    )
 async def _upsert_oauth_user(email: str, full_name: str, provider: str) -> dict:
     db = _get_db()
     user = await db.users.find_one({"email": email})
@@ -441,7 +476,8 @@ async def google_callback(code: str = "", state: str = "", error: str = ""):
         return RedirectResponse(f"{app_url}/login?error=no_email")
 
     user = await _upsert_oauth_user(email, full_name, "google")
-    return RedirectResponse(_oauth_success_redirect(app_url, user["id"], email, full_name))
+    redirect_url = await _oauth_success_redirect(app_url, user["id"], email, full_name)
+    return RedirectResponse(redirect_url)
 
 
 # ── Facebook OAuth ────────────────────────────────────────────────────────────
@@ -501,7 +537,8 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
         return RedirectResponse(f"{app_url}/login?error=no_email")
 
     user = await _upsert_oauth_user(email, full_name, "facebook")
-    return RedirectResponse(_oauth_success_redirect(app_url, user["id"], email, full_name))
+    redirect_url = await _oauth_success_redirect(app_url, user["id"], email, full_name)
+    return RedirectResponse(redirect_url)
 
 
 # ── Profile ───────────────────────────────────────────────────────────────────

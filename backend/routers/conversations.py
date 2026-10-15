@@ -30,11 +30,12 @@ async def save_session_metadata(
         user_id = current_user["id"]
         from datetime import datetime, timezone
 
-        # Verify existing session ownership if it already exists
+        # Verify existing session ownership: default-deny if session exists and is unowned or belongs to another user
         existing = await db.conversations.find_one({"session_id": meta.session_id})
-        if existing and existing.get("user_id") and existing["user_id"] != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized to modify this session")
-
+        if existing:
+            existing_owner = existing.get("user_id")
+            if not existing_owner or existing_owner != user_id:
+                raise HTTPException(status_code=403, detail="Not authorized to modify this session")
         await db.conversations.update_one(
             {"session_id": meta.session_id},
             {
@@ -102,7 +103,8 @@ async def get_session_messages(
         )
         if not doc:
             return {"session_id": session_id, "messages": []}
-        if doc.get("user_id") and doc["user_id"] != user_id:
+        doc_owner = doc.get("user_id")
+        if not doc_owner or doc_owner != user_id:
             raise HTTPException(status_code=403, detail="Not authorized to access this session")
         return {"session_id": session_id, "messages": doc.get("messages", [])}
     except HTTPException:
@@ -121,10 +123,9 @@ async def get_conversation(
     try:
         memory = get_session_memory()
         user_id = current_user["id"]
-        owner_id = await memory.get_session_user_id_async(session_id)
-        if owner_id and owner_id != user_id:
+        has_access = await memory.check_session_access_async(session_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
-
         messages = await memory.get_history_async(session_id)
         return ConversationHistory(
             session_id=session_id,
@@ -167,10 +168,9 @@ async def clear_conversation(
     try:
         memory = get_session_memory()
         user_id = current_user["id"]
-        owner_id = await memory.get_session_user_id_async(session_id)
-        if owner_id and owner_id != user_id:
+        has_access = await memory.check_session_access_async(session_id, user_id)
+        if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to clear this conversation")
-
         await memory.clear_session_async(session_id)
         return {"status": "cleared", "session_id": session_id}
     except HTTPException:
