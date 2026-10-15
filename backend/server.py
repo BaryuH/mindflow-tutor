@@ -62,6 +62,8 @@ async def _seed_admin():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from core.auth import validate_jwt_secret
+    validate_jwt_secret()
     await _seed_admin()
     # Inject MongoDB into session memory so messages are persisted
     from persistence.session_memory import get_session_memory
