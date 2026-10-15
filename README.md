@@ -23,16 +23,17 @@ Detects distraction and confusion via webcam in real time, then proactively help
 
 ## Quick start
 
-Prerequisites: **Python 3.11**, **Node.js 20**, **Docker** (for MongoDB), and API keys for OpenAI, ElevenLabs, Tavily and LlamaParse.
+Prerequisites: **Python 3.10 or 3.11**, **Node.js 20**, **Docker** (for MongoDB), and API keys for OpenAI, ElevenLabs, Tavily and LlamaParse.
 
 ```bash
 # 1. MongoDB
 docker compose up -d mongo
 
-# 2. Backend — web + AI deps in one pass (CPU-only torch)
+# 2. Backend — web + AI deps in one pass
 cd backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+# GPU host (CUDA 12.4): .../whl/cu124   ·   CPU only: .../whl/cpu
+pip install --extra-index-url https://download.pytorch.org/whl/cu124 \
   -r requirements-web.txt -r requirements-ai.txt
 cp .env.example .env        # then fill in your keys
 uvicorn server:app --reload --port 8000
