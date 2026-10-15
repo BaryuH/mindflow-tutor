@@ -310,16 +310,58 @@ def _oauth_redirect_uri(provider: str) -> str:
     return f"{app_url}/api/auth/{provider}/callback"
 
 
-def _oauth_success_redirect(app_url: str, user_id: str, email: str, full_name: str) -> str:
-    access_token = _create_jwt(
-        {"sub": user_id, "email": email},
-        expire_hours=ACCESS_TOKEN_EXPIRE_HOURS,
-    )
-    user_b64 = base64.urlsafe_b64encode(
-        json.dumps({"id": user_id, "email": email, "full_name": full_name}).encode()
-    ).decode()
-    return f"{app_url}/oauth-callback?token={access_token}&user={user_b64}"
+class OAuthExchangeRequest(BaseModel):
+    code: str
 
+
+_used_exchange_jtis = set()
+
+
+def _oauth_success_redirect(app_url: str, user_id: str, email: str, full_name: str) -> str:
+    jti = str(uuid.uuid4())
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "full_name": full_name,
+        "purpose": "oauth_exchange",
+        "jti": jti,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=2),
+    }
+    exchange_code = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return f"{app_url}/oauth-callback?code={exchange_code}"
+
+
+@router.post("/oauth/exchange", response_model=TokenResponse)
+async def exchange_oauth_code(body: OAuthExchangeRequest):
+    """Exchange a short-lived single-use OAuth exchange code for an access token in HTTP response body."""
+    try:
+        payload = jwt.decode(body.code, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("purpose") != "oauth_exchange":
+            raise HTTPException(status_code=400, detail="Invalid exchange code")
+        jti = payload.get("jti")
+        if not jti or jti in _used_exchange_jtis:
+            raise HTTPException(status_code=400, detail="Exchange code has already been used or is invalid")
+        _used_exchange_jtis.add(jti)
+
+        user_id = payload.get("sub")
+        email = payload.get("email", "")
+        full_name = payload.get("full_name", "")
+
+        access_token = _create_jwt(
+            {"sub": user_id, "email": email},
+            expire_hours=ACCESS_TOKEN_EXPIRE_HOURS,
+        )
+
+        return TokenResponse(
+            access_token=access_token,
+            user={
+                "id": user_id,
+                "email": email,
+                "full_name": full_name,
+            },
+        )
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Invalid or expired exchange code")
 
 async def _upsert_oauth_user(email: str, full_name: str, provider: str) -> dict:
     db = _get_db()
